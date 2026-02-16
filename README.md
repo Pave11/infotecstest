@@ -14,23 +14,6 @@ TCP File Transfer (C++ / Linux)
 Компилятор: g++ (C++17)
 Протокол: TCP (IPv4)
 
-Структура проекта
-    .
-    ├── include/
-    │   ├── client.h
-    │   ├── server.h
-    │   └── logger.h
-    ├── client/
-    │   ├── client.cpp
-    │   └── main.cpp
-    ├── server/
-    │   ├── server.cpp
-    │   └── main.cpp
-    ├── bin/
-    │   ├── client_app
-    │   └── server_app
-    ├── Makefile
-    └── run_test.sh
 
 Сборка
 
