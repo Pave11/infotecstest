@@ -5,7 +5,13 @@
 #include <fstream>
 #include <csignal>
 #include <iostream>
+#include <atomic>
+#include <thread>
+#include <vector>
+#include <cstdint>
+#include <endian.h> 
 
+// Статический флаг работы сервера
 std::atomic<bool> Server::running_(true);
 
 Server::Server(int port, const std::string& filePath, size_t chunkSize)
@@ -13,12 +19,14 @@ Server::Server(int port, const std::string& filePath, size_t chunkSize)
 {
 }
 
+// Обработчик сигналов Ctrl+C / SIGTERM
 void Server::signalHandler(int signum)
 {
     logMessage(LogLevel::Info, "Получен сигнал остановки сервера");
     running_ = false;
 }
 
+// Настройка сокета сервера
 void Server::setupSocket()
 {
     serverSocket_ = socket(AF_INET, SOCK_STREAM, 0);
@@ -48,6 +56,7 @@ void Server::setupSocket()
     logMessage(LogLevel::Info, "Сервер запущен на порту " + std::to_string(port_));
 }
 
+// Основной цикл сервера
 void Server::run()
 {
     setupSocket();
@@ -62,7 +71,7 @@ void Server::run()
         socklen_t clientLen = sizeof(clientAddr);
         int clientSock = accept(serverSocket_, (sockaddr*)&clientAddr, &clientLen);
 
-        if (!running_) break; // если сигнал, выходим
+        if (!running_) break; // если сигнал остановки, выходим
 
         if (clientSock < 0)
         {
@@ -72,7 +81,7 @@ void Server::run()
 
         logMessage(LogLevel::Info, "Клиент подключен");
 
-        // Создаём поток для клиента
+        // Создаём поток для обслуживания клиента
         clientThreads_.emplace_back(&Server::handleClient, this, clientSock);
         clientThreads_.back().detach();
     }
@@ -83,6 +92,7 @@ void Server::run()
         close(serverSocket_);
 }
 
+// Обслуживание одного клиента
 void Server::handleClient(int clientSocket)
 {
     std::ifstream file(filePath_, std::ios::binary);
@@ -94,8 +104,17 @@ void Server::handleClient(int clientSocket)
     }
 
     file.seekg(0, std::ios::end);
-    size_t totalSize = file.tellg();
+    uint64_t totalSize = file.tellg();
     file.seekg(0, std::ios::beg);
+
+    // Отправляем клиенту размер файла (сетевой порядок байт)
+    uint64_t sizeNet = htobe64(totalSize);
+    if (send(clientSocket, reinterpret_cast<char*>(&sizeNet), sizeof(sizeNet), 0) != sizeof(sizeNet))
+    {
+        logMessage(LogLevel::Error, "Не удалось отправить размер файла клиенту");
+        close(clientSocket);
+        return;
+    }
 
     size_t sentBytes = 0;
     char* buffer = new char[chunkSize_];
@@ -114,7 +133,11 @@ void Server::handleClient(int clientSocket)
                 break;
             }
             sentBytes += n;
-            std::cout << "\r<передано " << sentBytes << " байт / " << totalSize << " байт>" << std::flush;
+
+            // Прогресс в процентах
+            double percent = (double)sentBytes / totalSize * 100;
+            std::cout << "\r<передано " << sentBytes << " / " << totalSize
+                      << " байт (" << int(percent) << "%)>" << std::flush;
         }
     }
 

@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <fstream>
 #include <iostream>
+#include <endian.h> 
 
 Client::Client(const std::string& serverIp,
                const std::string& serverFile,
@@ -18,6 +19,7 @@ Client::Client(const std::string& serverIp,
 {
 }
 
+// Разбор аргумента -src формата <IP>:<путь>
 bool Client::parseSrc(const std::string& src, std::string& ip, std::string& path)
 {
     size_t pos = src.find(':');
@@ -29,7 +31,6 @@ bool Client::parseSrc(const std::string& src, std::string& ip, std::string& path
 
 void Client::run()
 {
-    // Создаём сокет
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0)
     {
@@ -43,16 +44,29 @@ void Client::run()
     if (inet_pton(AF_INET, serverIp_.c_str(), &serverAddr.sin_addr) <= 0)
     {
         logMessage(LogLevel::Error, "Неверный IP-адрес");
+        close(sock);
         return;
     }
 
     if (connect(sock, (sockaddr*)&serverAddr, sizeof(serverAddr)) < 0)
     {
         logMessage(LogLevel::Error, "Не удалось подключиться к серверу");
+        close(sock);
         return;
     }
 
-    // Временный файл
+    // --- Получаем размер файла от сервера (сетевой порядок байт) ---
+    uint64_t totalSizeNet = 0;
+    ssize_t n = recv(sock, reinterpret_cast<char*>(&totalSizeNet), sizeof(totalSizeNet), 0);
+    if (n != sizeof(totalSizeNet))
+    {
+        logMessage(LogLevel::Error, "Не удалось получить размер файла");
+        close(sock);
+        return;
+    }
+    uint64_t totalSize = be64toh(totalSizeNet);
+
+    // --- Временный файл ---
     std::string tmpFile = localFile_ + ".tmp";
     std::ofstream out(tmpFile, std::ios::binary);
     if (!out.is_open())
@@ -63,15 +77,18 @@ void Client::run()
     }
 
     char* buffer = new char[chunkSize_];
-    size_t totalBytes = 0;
-    ssize_t n;
+    uint64_t receivedBytes = 0;
 
-    // Получаем данные от сервера
     while ((n = recv(sock, buffer, chunkSize_, 0)) > 0)
     {
         out.write(buffer, n);
-        totalBytes += n;
-        std::cout << "\r<передано " << totalBytes << " байт>" << std::flush;
+        receivedBytes += n;
+
+        // --- Вывод прогресса в процентах ---
+        double percent = (totalSize > 0) ? (receivedBytes * 100.0 / totalSize) : 0;
+        std::cout << "\r<передано " << receivedBytes << " / " << totalSize
+                  << " байт (" << static_cast<int>(percent) << "%)>"
+                  << std::flush;
     }
 
     logMessage(LogLevel::Info, "\nПриём файла завершён.");
@@ -80,8 +97,8 @@ void Client::run()
     out.close();
     close(sock);
 
-    // Переименовываем временный файл в конечный
-    if (totalBytes > 0)
+    // --- Переименовываем временный файл в конечный ---
+    if (receivedBytes > 0)
     {
         if (std::rename(tmpFile.c_str(), localFile_.c_str()) != 0)
         {
